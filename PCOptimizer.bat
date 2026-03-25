@@ -1,64 +1,51 @@
 @echo off
 chcp 65001 >nul
 setlocal enabledelayedexpansion
-title PC Optimizer Agent - Claude AI
+title PC Optimizer Agent
 
 :: ================================================================
-::  PASO 1 - Verificar si ya corre como Administrador
+::  AUTO-ELEVACION A ADMINISTRADOR
 :: ================================================================
 net session >nul 2>&1
-if %errorlevel% == 0 goto :ADMIN_OK
-
-:: ================================================================
-::  PASO 2 - No es admin: re-lanzarse con privilegios elevados
-:: ================================================================
-echo.
-echo  [!] Se requieren permisos de Administrador.
-echo  [!] Solicitando elevacion...
-echo.
-timeout /t 2 >nul
-powershell -Command "Start-Process '%~f0' -Verb RunAs"
-exit /b
-
-:: ================================================================
-::  PASO 3 - Ya es admin, verificar entorno
-:: ================================================================
-:ADMIN_OK
-cls
-
-:: ── Verificar Python ────────────────────────────────────────────
-python --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo  [X] Python no esta instalado o no esta en el PATH.
-    echo  Descargalo desde: https://www.python.org/downloads/
-    pause
-    exit /b 1
+    powershell -Command "Start-Process '%~f0' -Verb RunAs"
+    exit /b
 )
 
-:: ── Verificar dependencias ──────────────────────────────────────
-python -c "import anthropic, psutil, colorama" >nul 2>&1
-if %errorlevel% neq 0 (
-    echo  [!] Instalando dependencias...
-    python -m pip install anthropic psutil colorama --quiet
+:: ================================================================
+::  RECOPILAR INFO DEL SISTEMA AL INICIO
+:: ================================================================
+echo  Recopilando informacion del sistema...
+
+for /f "skip=1 tokens=*" %%i in ('wmic cpu get Name 2^>nul') do (
+    if not "%%i"=="" if not defined CPU set CPU=%%i
+)
+for /f "skip=1 tokens=1" %%i in ('wmic computersystem get TotalPhysicalMemory 2^>nul') do (
+    if not "%%i"=="" set /a RAM_GB=%%i/1073741824
+)
+for /f "tokens=2 delims==" %%i in ('wmic os get Caption /value 2^>nul') do (
+    if not "%%i"=="" set OS_NAME=%%i
+)
+for /f "skip=1 tokens=*" %%i in ('wmic path win32_videocontroller get Name 2^>nul') do (
+    if not "%%i"=="" if not defined GPU set GPU=%%i
+)
+for /f "tokens=*" %%i in ('hostname') do set PC_NAME=%%i
+for /f "skip=1 tokens=*" %%i in ('wmic csproduct get UUID 2^>nul') do (
+    if not "%%i"=="" if not defined UUID set UUID=%%i
+)
+for /f "skip=1 tokens=*" %%i in ('wmic bios get SerialNumber 2^>nul') do (
+    if not "%%i"=="" if not defined SERIAL set SERIAL=%%i
+)
+for /f "tokens=2 delims=:" %%i in ('ipconfig ^| findstr /i "IPv4" 2^>nul') do (
+    if not defined IP ( set IP=%%i & set IP=!IP: =! )
+)
+for /f "skip=1 tokens=1" %%i in ('getmac /fo table /nh 2^>nul') do (
+    if not defined MAC set MAC=%%i
 )
 
-:: ── Verificar API Key ───────────────────────────────────────────
-if "%ANTHROPIC_API_KEY%"=="" (
-    echo.
-    echo  ================================================================
-    echo   ANTHROPIC API KEY requerida
-    echo   Obtienela en: https://console.anthropic.com/
-    echo  ================================================================
-    echo.
-    set /p ANTHROPIC_API_KEY="  Ingresa tu API Key: "
-    if "!ANTHROPIC_API_KEY!"=="" (
-        echo  [X] API Key no ingresada. Saliendo.
-        pause
-        exit /b 1
-    )
-    setx ANTHROPIC_API_KEY "!ANTHROPIC_API_KEY!" >nul 2>&1
-    echo  [OK] API Key guardada.
-)
+:: Tipo de disco via PowerShell
+for /f "tokens=*" %%i in ('powershell -NoProfile -Command "try { $d = Get-PhysicalDisk | Select-Object -First 1; if ($d.MediaType -match 'NVMe' -or $d.BusType -eq 'NVMe') { 'NVMe SSD' } elseif ($d.MediaType -eq 'SSD') { 'SSD' } elseif ($d.MediaType -eq 'HDD') { 'HDD' } else { 'SSD/HDD' } } catch { 'SSD/HDD' }" 2^>nul') do set DISK=%%i
+if not defined DISK set DISK=SSD/HDD
 
 :: ================================================================
 ::  MENU PRINCIPAL
@@ -67,48 +54,137 @@ if "%ANTHROPIC_API_KEY%"=="" (
 cls
 echo.
 echo  ================================================================
-echo    PC OPTIMIZER AGENT  v2.0  -  Powered by Claude AI
-echo    Ejecutando como Administrador
+echo    PC OPTIMIZER AGENT  -  Sin API Key
+echo    Equipo: !PC_NAME!
 echo  ================================================================
 echo.
-echo    1.  Analisis completo del PC con Claude AI
+echo    1.  Generar prompt de optimizacion y abrir Claude AI
 echo    2.  Modificar nombre del dispositivo
-echo    3.  Extraer ID fisico, IP y MAC
+echo    3.  Extraer ID fisico, IP y MAC  (Devices Report)
 echo    0.  Salir
 echo.
 echo  ================================================================
 echo.
 set /p OPCION="  Selecciona una opcion: "
 
-if "!OPCION!"=="1" goto :AGENTE
+if "!OPCION!"=="1" goto :GENERAR_PROMPT
 if "!OPCION!"=="2" goto :CAMBIAR_NOMBRE
 if "!OPCION!"=="3" goto :INFO_DISPOSITIVO
 if "!OPCION!"=="0" goto :SALIR
+
 echo  [!] Opcion invalida.
 timeout /t 2 >nul
 goto :MENU
 
 
 :: ================================================================
-::  OPCION 1 - Agente Claude AI
+::  OPCION 1 - GENERAR PROMPT Y ABRIR CLAUDE AI
 :: ================================================================
-:AGENTE
+:GENERAR_PROMPT
 cls
 echo.
-echo  [OK] Iniciando agente de analisis...
+echo  ================================================================
+echo    GENERANDO PROMPT DE OPTIMIZACION
+echo  ================================================================
 echo.
-python "%~dp0pc_optimizer_agent.py"
-if %errorlevel% neq 0 (
-    echo.
-    echo  [X] El agente termino con un error.
-)
+echo  Uso principal del equipo:
+echo    1. Gaming
+echo    2. Trabajo / Oficina
+echo    3. Diseno / Edicion
+echo    4. Uso general
 echo.
+set /p USO_NUM="  Selecciona [1-4]: "
+if "!USO_NUM!"=="1" set USO=gaming
+if "!USO_NUM!"=="2" set USO=trabajo y oficina
+if "!USO_NUM!"=="3" set USO=diseno y edicion
+if "!USO_NUM!"=="4" set USO=uso general
+if not defined USO set USO=uso general
+
+echo.
+set /p APPS="  Aplicaciones que mas usas (ej: Chrome, Office): "
+if "!APPS!"=="" set APPS=no especificado
+
+echo.
+set /p PROBLEMAS="  Problemas que notas (ej: lentitud, alto RAM): "
+if "!PROBLEMAS!"=="" set PROBLEMAS=ninguno especificado
+
+:: ── Escribir prompt a archivo temporal ──────────────────────
+set TMPFILE=%TEMP%\pc_optimizer_prompt.txt
+
+(
+echo Actua como un experto en administracion de sistemas Windows con mas de 15 anos de experiencia en optimizacion de rendimiento, seguridad y mantenimiento de equipos. Analiza la informacion de mi PC y dame un plan completo de optimizacion:
+echo.
+echo ================================================================
+echo INFORMACION DEL SISTEMA
+echo ================================================================
+echo Nombre del equipo : !PC_NAME!
+echo Sistema Operativo : !OS_NAME!
+echo Procesador        : !CPU!
+echo RAM instalada     : !RAM_GB! GB
+echo Tipo de disco     : !DISK!
+echo Tarjeta grafica   : !GPU!
+echo Uso principal     : !USO!
+echo Apps frecuentes   : !APPS!
+echo Problemas         : !PROBLEMAS!
+echo.
+echo ================================================================
+echo AREAS A OPTIMIZAR
+echo ================================================================
+echo.
+echo 1. RENDIMIENTO GENERAL
+echo - Procesos de inicio a deshabilitar segun mi uso
+echo - Plan de energia optimo para mi CPU
+echo - Ajustes visuales para priorizar rendimiento
+echo - Optimizacion del archivo de paginacion para !RAM_GB! GB de RAM
+echo.
+echo 2. FIREWALL Y SEGURIDAD
+echo - Reglas de Firewall recomendadas para uso de !USO!
+echo - Servicios de Windows a deshabilitar
+echo - Herramientas gratuitas de seguridad recomendadas
+echo - Como verificar procesos sospechosos
+echo.
+echo 3. GESTION DE APLICACIONES
+echo - Como identificar apps no usadas en 30/60/90 dias
+echo - Bloatware de Windows seguro de eliminar
+echo - Herramientas para desinstalacion limpia
+echo.
+echo 4. OPTIMIZACION DE MEMORIA RAM ^(!RAM_GB! GB^)
+echo - Procesos que mas consumen RAM y como gestionarlos
+echo - Configuraciones para liberar RAM automaticamente
+echo - Comandos PowerShell para monitoreo de memoria
+echo.
+echo 5. LIMPIEZA Y MANTENIMIENTO
+echo - Limpieza de temporales, cache y logs del sistema
+echo - Optimizacion de disco tipo !DISK!
+echo - Tareas automaticas de mantenimiento recomendadas
+echo.
+echo ================================================================
+echo Dame un RESUMEN EJECUTIVO con las 10 acciones mas importantes
+echo ordenadas por impacto, indicando cada una como [BASICO] o
+echo [AVANZADO] e incluye el comando exacto de PowerShell o CMD.
+echo ================================================================
+) > "!TMPFILE!"
+
+:: ── Copiar al portapapeles ───────────────────────────────────
+type "!TMPFILE!" | clip
+del "!TMPFILE!" >nul 2>&1
+
+echo.
+echo  [OK] Prompt copiado al portapapeles.
+echo  [OK] Abriendo Claude AI en el navegador...
+echo.
+echo  Solo presiona Ctrl+V dentro del chat y Enter.
+echo.
+
+:: ── Abrir navegador ──────────────────────────────────────────
+start https://claude.ai/new
+
 pause
 goto :MENU
 
 
 :: ================================================================
-::  OPCION 2 - Cambiar nombre del dispositivo (sin reinicio)
+::  OPCION 2 - CAMBIAR NOMBRE DEL DISPOSITIVO
 :: ================================================================
 :CAMBIAR_NOMBRE
 cls
@@ -117,66 +193,44 @@ echo  ================================================================
 echo    MODIFICAR NOMBRE DEL DISPOSITIVO
 echo  ================================================================
 echo.
-
-:: Mostrar nombre actual
-for /f "tokens=*" %%i in ('hostname') do set NOMBRE_ACTUAL=%%i
-echo  Nombre actual:  !NOMBRE_ACTUAL!
+echo  Nombre actual: !PC_NAME!
 echo.
-
 set /p NOMBRE_NUEVO="  Nuevo nombre (max 15 caracteres, sin espacios): "
 
-:: Validar que no este vacio
 if "!NOMBRE_NUEVO!"=="" (
     echo  [X] Nombre invalido. Operacion cancelada.
     timeout /t 2 >nul
     goto :MENU
 )
-
-:: Validar que sea diferente
-if /i "!NOMBRE_NUEVO!"=="!NOMBRE_ACTUAL!" (
-    echo  [!] El nombre es identico al actual. Sin cambios.
+if /i "!NOMBRE_NUEVO!"=="!PC_NAME!" (
+    echo  [!] El nombre es identico al actual.
     timeout /t 2 >nul
     goto :MENU
 )
 
 echo.
-echo  [!] Se cambiara el nombre de "!NOMBRE_ACTUAL!" a "!NOMBRE_NUEVO!"
-set /p CONFIRMAR="  Confirmar? [S/N]: "
-if /i not "!CONFIRMAR!"=="S" (
-    echo  Operacion cancelada.
-    timeout /t 2 >nul
-    goto :MENU
-)
+set /p CONFIRMAR="  Cambiar '!PC_NAME!' por '!NOMBRE_NUEVO!'? [S/N]: "
+if /i not "!CONFIRMAR!"=="S" goto :MENU
 
 echo.
-echo  [..] Aplicando cambio de nombre...
+echo  [..] Aplicando cambio...
 
-:: Cambiar en registro (efecto inmediato en la sesion actual)
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName" /v ComputerName /t REG_SZ /d "!NOMBRE_NUEVO!" /f >nul 2>&1
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName" /v ComputerName /t REG_SZ /d "!NOMBRE_NUEVO!" /f >nul 2>&1
 reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v Hostname /t REG_SZ /d "!NOMBRE_NUEVO!" /f >nul 2>&1
 reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v "NV Hostname" /t REG_SZ /d "!NOMBRE_NUEVO!" /f >nul 2>&1
-
-:: Cambiar via PowerShell (metodo oficial)
 powershell -Command "Rename-Computer -NewName '!NOMBRE_NUEVO!' -Force" >nul 2>&1
 
-if %errorlevel% == 0 (
-    echo  [OK] Nombre cambiado exitosamente a: !NOMBRE_NUEVO!
-    echo.
-    echo  [!] NOTA: El nuevo nombre es visible en el registro.
-    echo  [!] Para que aparezca en todas las pantallas de Windows
-    echo  [!] se recomienda reiniciar el equipo cuando sea posible.
-) else (
-    echo  [X] No se pudo cambiar el nombre. Verifica permisos de Admin.
-)
-
+echo  [OK] Nombre cambiado a: !NOMBRE_NUEVO!
+echo  [!] Reinicia el equipo para aplicar en todas las pantallas.
 echo.
+set PC_NAME=!NOMBRE_NUEVO!
 pause
 goto :MENU
 
 
 :: ================================================================
-::  OPCION 3 - Extraer ID fisico, IP y MAC
+::  OPCION 3 - EXTRAER INFO Y GUARDAR EN DEVICES REPORT
 :: ================================================================
 :INFO_DISPOSITIVO
 cls
@@ -185,56 +239,33 @@ echo  ================================================================
 echo    INFORMACION DEL DISPOSITIVO
 echo  ================================================================
 echo.
-
-:: ── Archivo de reporte (siempre el mismo, acumula registros) ──
-set REPORTE=%~dp0Devices Report.txt
-
-:: ── Nombre del equipo ─────────────────────────────────────────
-for /f "tokens=*" %%i in ('hostname') do set DEV_NOMBRE=%%i
-
-:: ── UUID / ID Fisico ──────────────────────────────────────────
-for /f "skip=1 tokens=*" %%i in ('wmic csproduct get UUID 2^>nul') do (
-    if not "%%i"=="" set DEV_UUID=%%i
-)
-
-:: ── Numero de serie BIOS ──────────────────────────────────────
-for /f "skip=1 tokens=*" %%i in ('wmic bios get SerialNumber 2^>nul') do (
-    if not "%%i"=="" set DEV_SERIAL=%%i
-)
-
-:: ── IP principal ──────────────────────────────────────────────
-for /f "tokens=2 delims=:" %%i in ('ipconfig ^| findstr /i "IPv4"') do (
-    set DEV_IP=%%i
-    set DEV_IP=!DEV_IP: =!
-)
-
-:: ── MAC principal ─────────────────────────────────────────────
-for /f "skip=1 tokens=1" %%i in ('getmac /fo table /nh 2^>nul') do (
-    if not "%%i"=="" set DEV_MAC=%%i
-)
-
-:: ── Mostrar en pantalla ───────────────────────────────────────
-echo  Nombre del equipo : !DEV_NOMBRE!
-echo  ID Fisico (UUID)  : !DEV_UUID!
-echo  N. Serie (BIOS)   : !DEV_SERIAL!
-echo  Direccion IP      : !DEV_IP!
-echo  Direccion MAC     : !DEV_MAC!
+echo  Nombre del equipo : !PC_NAME!
+echo  ID Fisico (UUID)  : !UUID!
+echo  N. Serie (BIOS)   : !SERIAL!
+echo  Direccion IP      : !IP!
+echo  Direccion MAC     : !MAC!
 echo.
 
-:: ── Guardar registro en Devices Report.txt (modo append) ──────
+:: ── Guardar en Devices Report.txt (append) ──────────────────
+set REPORTE=%~dp0Devices Report.txt
 (
     echo ================================================================
     echo  REGISTRO: %date% %time%
     echo ================================================================
-    echo  Nombre del equipo : !DEV_NOMBRE!
-    echo  ID Fisico (UUID)  : !DEV_UUID!
-    echo  N. Serie (BIOS)   : !DEV_SERIAL!
-    echo  Direccion IP      : !DEV_IP!
-    echo  Direccion MAC     : !DEV_MAC!
+    echo  Nombre del equipo : !PC_NAME!
+    echo  ID Fisico (UUID)  : !UUID!
+    echo  N. Serie (BIOS)   : !SERIAL!
+    echo  Direccion IP      : !IP!
+    echo  Direccion MAC     : !MAC!
+    echo  Sistema Operativo : !OS_NAME!
+    echo  CPU               : !CPU!
+    echo  RAM               : !RAM_GB! GB
+    echo  Disco             : !DISK!
+    echo  GPU               : !GPU!
     echo.
 ) >> "!REPORTE!"
 
-echo  [OK] Registro agregado en: !REPORTE!
+echo  [OK] Registro guardado en: !REPORTE!
 echo.
 pause
 goto :MENU
@@ -246,6 +277,5 @@ goto :MENU
 :SALIR
 echo.
 echo  Hasta luego.
-echo.
 timeout /t 2 >nul
 exit /b

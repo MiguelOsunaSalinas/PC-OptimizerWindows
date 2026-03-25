@@ -1,10 +1,10 @@
 # ================================================================
 #  PC OPTIMIZER AGENT - Instalador One-Liner
-#  Uso: irm https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main/install.ps1 | iex
+#  Uso: irm https://raw.githubusercontent.com/MiguelOsunaSalinas/PC-OptimizerWindows/main/install.ps1 | iex
 # ================================================================
 
 $ErrorActionPreference = "Stop"
-$REPO_BASE = "https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main"
+$REPO_BASE = "https://raw.githubusercontent.com/MiguelOsunaSalinas/PC-OptimizerWindows/main"
 $INSTALL_DIR = "C:\PCOptimizer"
 
 function Write-Header {
